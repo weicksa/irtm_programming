@@ -85,36 +85,46 @@ def index(filename: str):
     # return all data structures we created
     return dictionary, postings, df
 
-
-"""
+# bigram:[liste mit termen in denen bigram vorkam]
 def create_bi_gram_dict(dictionary):
     bigram_dict = {}
     for key in dictionary:
-        for i in len(key)
-            try:
-                if key[i-1].concat(key[i]) not in bigram_dict:
-                    bigram_dict[key[i-1].concat(key[i])] = [key]
+        for i in range(len(key)+1):
+            if i == len(key):
+                if key[i-1]+"$" not in bigram_dict:
+                    bigram_dict[key[i-1]+"$"] = [key]
                 else:
-                    bigram_dict[key[i-1].concat(key[i])].append(key)
-            except IndexError:
-                 if "$".concat(key[i]) not in bigram_dict:
-                    bigram_dict["$".concat(key[i])] = [key]
+                    bigram_dict[key[i-1]+"$"].append(key)
+            elif i-1 >=0:
+                if key[i-1]+(key[i]) not in bigram_dict:
+                    bigram_dict[key[i-1]+(key[i])] = [key]
                 else:
-                    bigram_dict["$".concat(key[i])].append(key)
+                    bigram_dict[key[i-1]+(key[i])].append(key)
+            else:
+                if "$"+(key[i]) not in bigram_dict:
+                    bigram_dict["$"+(key[i])] = [key]
+                else:
+                    bigram_dict["$"+(key[i])].append(key)
+    return bigram_dict
 
-"""
 
-"""
+
+
 def and_compare(term1: str, term2: str, dict, postings, df):
+    
+    res_list = []
 
     term1_list = query(term1,dict=dict, postings=postings, df=df)
     term2_list = query(term2,dict=dict, postings=postings, df=df)
 
     term_1_iter = iter(term1_list)
     term_2_iter = iter(term2_list)
-        
-    x = next(term_1_iter)
-    y = next(term_2_iter)
+
+    try:   
+        x = next(term_1_iter)
+        y = next(term_2_iter)
+    except StopIteration:
+        pass
 
     # find "AND" matches by comparing entries in both postingslists pairwise
     # if they match increment both by one, else increase the one with smaller index
@@ -133,6 +143,8 @@ def and_compare(term1: str, term2: str, dict, postings, df):
                 y = next(term_2_iter)
         except StopIteration:
             flag = False
+        except UnboundLocalError:
+            flag = False
             
     # get the DataFrame entry for every result
     # TODO do this in another function
@@ -141,14 +153,47 @@ def and_compare(term1: str, term2: str, dict, postings, df):
 
     return res_list
 
-"""
-"""
-def get_detailed_results(res_list: [], df):
+
+def get_detailed_results(res_list, df):
     detailed_res_list = []
     for res in res_list:
         detailed_res_list.append((df.iloc[res[0]]))
     return detailed_res_list
-"""
+
+def get_wildcard_grams(term: str):
+    wild_query = []
+    saw_wild = False
+   
+    for i in range(len(term)+1):
+        # b$
+        if i == len(term) and term[i-1] != "*":
+            wild_query.append(term[i-1]+"$")
+        # *$
+        elif i == len(term):
+            pass
+        elif i-1 >=0:
+            # $a*
+            if term[i] == "*" and i-1 == 0:
+                wild_query.append("$"+term[i-1])
+                saw_wild = True
+            # ab*
+            if term[i]=="*":      # $abc*def$ -> a => $a -> b => append ab -> c => append bc -> * => True -> d => False
+                saw_wild = True     # e => append ed -> f => append ef -> $ => append f$
+                # ...*a
+            elif saw_wild:          # $*abc -> saw_wild = * => True -> a => False -> b append ab
+                saw_wild = False
+                
+            # ...ab
+            else:
+                wild_query.append(term[i-1]+term[i])
+        # $*
+        elif term[i] == "*":
+            saw_wild = True
+        # $a
+        else:
+            wild_query.append("$"+term[i])
+    return wild_query
+
     
 
 
@@ -157,8 +202,7 @@ def query(term1: str, term2=None, dict=None, postings=None, df=None):
     """
     Search for a postings list for one term, or search for 'AND' occurrences of two terms
 
-    @param term1        if only term1 is given, return postings list for term1, else return res and detailed_res lists
-    @param term2        optional, if given, compute results for term1 AND term2
+    @param terms        list of terms that should be compared
     @param dict         optional parameter dict, if dict, postings and df are not given, create them using index()
     @param postings     see dict
     @param df           see dict
@@ -166,7 +210,7 @@ def query(term1: str, term2=None, dict=None, postings=None, df=None):
     @return detailed_res_list   returns the dataFrame entries for all results
     """
     res_list = []
-    detailed_res_list = []
+    bi_gram_dict = create_bi_gram_dict(dict)
 
     # if dict, postings or df are None, create them using index()
     try:
@@ -175,55 +219,86 @@ def query(term1: str, term2=None, dict=None, postings=None, df=None):
     except ValueError:
         pass
     
+    wildcards_1 = False
+    wildcards_2 = False
     # normalize term1, so that it matches with the types in dictionary
     # TODO implement wanted behaviour for terms as list, if len = 1 --> one term, we can normalize all
     # TODO  terms inside one iteration over list
-    term1 = normalize(term1, multiple=False)[0]
+    
+    if "*" in term1:
+        wildcards_1 = True
+    else:
+        normalized1 = normalize(term1, multiple=False)[0]
+
+    if term2 == None and not wildcards_1:
+        try:
+            for el in postings[dict[normalized1][0]]:
+                res_list.append(el)
+        except KeyError:
+            pass
+        return res_list
+    elif term2 == None and wildcards_1:
+        wild_query_1 = get_wildcard_grams(term1)
+        res = []
+        for bi in wild_query_1:
+            for term in bi_gram_dict[bi]:
+                res.append(term)
+        for el in res:
+            for ind in postings[dict[el][0]]:
+                res_list.append(ind)
+        return res_list
+    else:
+        if "*" in term2:
+            wildcards_2 = True
+        else:
+            normalized2 = normalize(term2, multiple=False)[0]
+    
     
     # TODO for assignment2: also split each term into its bigram with $ at the start
     # if no term2, return postings for term1
-    if term2 == None:
-        return postings[dict[term1][0]]
+    if wildcards_1 and wildcards_2:
+        wild_query_1 = get_wildcard_grams(term1)
+        wild_query_2 = get_wildcard_grams(term2)
+        term_1_list = []
+        term_2_list = []
+        for gram in wild_query_1:
+            for term_1 in bi_gram_dict[gram]:
+                term_1_list.append(term_1)
+        for gram in wild_query_2:
+            for term_2 in bi_gram_dict[gram]:
+                term_2_list.append(term_2)
+        for t1 in term_1_list:
+            for t2 in term_2_list:
+                for res in and_compare(t1, t2, dict, postings, df):
+                    res_list.append(res)
+    elif wildcards_1:
+        term_1_list = []
+        t2 = normalized2
+        wild_query_1 = get_wildcard_grams(term1)
+        for gram in wild_query_1:
+            for term_1 in bi_gram_dict[gram]:
+                term_1_list.append(term_1)
 
-    
+        for t1 in term_1_list:
+            for res in and_compare(t1, t2, dict, postings, df):
+                    res_list.append(res)
 
-    # TODO do all this in another function and_compare()
-    # if term2 not None, normalize term2, get postings list for both 
+    elif wildcards_2:
+        term_2_list = []
+        t1 = normalized1
+        wild_query_2 = get_wildcard_grams(term2)
+        for gram in wild_query_2:
+            for term_2 in bi_gram_dict[gram]:
+                term_2_list.append(term_2)
+        for t2 in term_2_list:
+            for res in and_compare(t1, t2, dict, postings, df):
+                    res_list.append(res)
     else:
-        term2 = normalize(term2, multiple=False)[0]
-        term1_list = query(term1,dict=dict, postings=postings, df=df)
-        term2_list = query(term2,dict=dict, postings=postings, df=df)
-        
-        # create iterator for postings lists
-        term_1_iter = iter(term1_list)
-        term_2_iter = iter(term2_list)
-        
-        x = next(term_1_iter)
-        y = next(term_2_iter)
+        res_list = and_compare(normalized1, normalized2)
 
-        # find "AND" matches by comparing entries in both postingslists pairwise
-        # if they match increment both by one, else increase the one with smaller index
-        # stop iterating, once one would be increased, but has no more values
-        flag = True
-        while flag:
-            try:
-                if x[0] == y[0]:
-                    res_list.append(x)
-                    x = next(term_1_iter)
-                    y = next(term_2_iter)
-                    
-                elif x[0] < y[0]:
-                    x = next(term_1_iter)
-                else:
-                    y = next(term_2_iter)
-            except StopIteration:
-                flag = False
-            
-        # get the DataFrame entry for every result
-        for res in res_list:
-            detailed_res_list.append((df.iloc[res[0]]))
-
-        return res_list, detailed_res_list
+    detailed_res  = get_detailed_results(res_list)
+    return res_list, detailed_res
+        
 
 
 
@@ -240,6 +315,7 @@ if __name__ == "__main__":
     with open("saved_df_alt.pkl", "wb+") as f:
         df.to_pickle(f)
     """
+
       
     # access the formerly created pickle (.pkl) files, this only works 
     # if the commented code above was executed previously
@@ -251,10 +327,21 @@ if __name__ == "__main__":
         loaded_df = pd.read_pickle(f)
 
 
+    res_1, res_1_detailed = query("tumors*","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
+    #res_2, res_2_detailed = query("tumors","cancer*",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
+    #res_3, res_3_detailed = query("tum*ors","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
+    #res_4, res_4_detailed = query("tumors","*cancer*",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
+
+    for i in range(10):
+        print(res_1_detailed[i]["body"])
+
+
+"""
     res_both, res_both_detailed = query("tumors","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
     # print subset of query results
     for i in range(10):
         print(res_both_detailed[i]["body"])
+        """
 
 """
 OUTPUT:
