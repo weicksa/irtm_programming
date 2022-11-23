@@ -1,10 +1,11 @@
-# Assignment01 - IRTM, Momo Takamatsu, Sandro Weick, Tana Deeg
+# Assignment02 - IRTM, Momo Takamatsu, Sandro Weick, Tana Deeg
 
 import pandas as pd
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 import pickle
+
 
 
 def normalize(text: str, multiple=True):
@@ -85,8 +86,13 @@ def index(filename: str):
     # return all data structures we created
     return dictionary, postings, df
 
-# bigram:[liste mit termen in denen bigram vorkam]
+
 def create_bi_gram_dict(dictionary):
+    """
+    @param dictionary requires pre existing term_dictionary
+    @return returns bi_gram_dictionary with bi_gram as key and all terms containing that 
+            bi_gram as value
+    """
     bigram_dict = {}
     for key in dictionary:
         for i in range(len(key)+1):
@@ -106,16 +112,21 @@ def create_bi_gram_dict(dictionary):
                 else:
                     bigram_dict["$"+(key[i])].append(key)
     return bigram_dict
+    
 
-
-
-
-def and_compare(term1: str, term2: str, dict, postings, df):
+def and_compare(term1: str, term2: str, term_dict, postings):
+    """
+    @param term1       query term 1
+    @param term2       query term 2
+    @param term_dict
+    @param postings
+    @return res_list   list with all postings_list entries that contain both terms
+    """
     
     res_list = []
 
-    term1_list = query(term1,dict=dict, postings=postings, df=df)
-    term2_list = query(term2,dict=dict, postings=postings, df=df)
+    term1_list = get_postings(term1, term_dict, postings)
+    term2_list = get_postings(term2, term_dict, postings)
 
     term_1_iter = iter(term1_list)
     term_2_iter = iter(term2_list)
@@ -146,29 +157,35 @@ def and_compare(term1: str, term2: str, dict, postings, df):
         except UnboundLocalError:
             flag = False
             
-    # get the DataFrame entry for every result
-    # TODO do this in another function
-    #for res in res_list:
-    #    detailed_res_list.append((df.iloc[res[0]]))
 
     return res_list
 
-
 def get_detailed_results(res_list, df):
+    """
+    @param res_list
+    @param df
+    """
     detailed_res_list = []
     for res in res_list:
         detailed_res_list.append((df.iloc[res[0]]))
     return detailed_res_list
 
 def get_wildcard_grams(term: str):
+    """
+    @param term         a term containing a wildcard
+    @return wild_query  list with all bi grams, based on wildcard query term
+    """
+    
     wild_query = []
     saw_wild = False
-   
+    
+    # iterate over each letter of term
     for i in range(len(term)+1):
-        # b$
+        # when we reach te last letter of a term, and it is not a star
+        # append letter + $
         if i == len(term) and term[i-1] != "*":
             wild_query.append(term[i-1]+"$")
-        # *$
+        # do not append letter + $ if the last letter is *
         elif i == len(term):
             pass
         elif i-1 >=0:
@@ -177,12 +194,11 @@ def get_wildcard_grams(term: str):
                 wild_query.append("$"+term[i-1])
                 saw_wild = True
             # ab*
-            if term[i]=="*":      # $abc*def$ -> a => $a -> b => append ab -> c => append bc -> * => True -> d => False
-                saw_wild = True     # e => append ed -> f => append ef -> $ => append f$
+            if term[i]=="*":      
+                saw_wild = True     
                 # ...*a
-            elif saw_wild:          # $*abc -> saw_wild = * => True -> a => False -> b append ab
-                saw_wild = False
-                
+            elif saw_wild:          
+                saw_wild = False  
             # ...ab
             else:
                 wild_query.append(term[i-1]+term[i])
@@ -194,11 +210,48 @@ def get_wildcard_grams(term: str):
             wild_query.append("$"+term[i])
     return wild_query
 
+def get_postings(term, term_dict, postings):
+    """
+    @param term
+    @param term_dict
+    @param pos_entries  list containing postings_list entry of term
+    """
+    pos_entries = postings[term_dict[term][0]]
+    return pos_entries
+
+
+def one_wild(wild, norm_term, bi_gram_dict, term_dict, posting):
+    """
+    @param wild
+    @param norm_term
+    @param bi_gram_dict 
+    @param term_dict    
+    @param posting  
+    @return res_list    list with all postings_entries containing both 
+                        wild and norm_term
+    """
+    res_list = []
+    wild_query = get_wildcard_grams(wild)
     
+    wild_terms = set()
+    temp_set = set()
+    for term in bi_gram_dict[wild_query[0]]:
+        wild_terms.add(term)
+    
+    for gram in wild_query[1:]:
+        for term in bi_gram_dict[gram]:
+            temp_set.add(term)
+        wild_terms = wild_terms.intersection(temp_set)
+        temp_set.clear()
+
+    for element in wild_terms:
+        for res in and_compare(element, norm_term, term_dict, posting):
+            res_list.append(res)
+
+    return res_list
 
 
-# TODO change query to accept terms as a list instead of term1, term2...
-def query(term1: str, term2=None, dict=None, postings=None, df=None):
+def query(term1: str, term2=None, term_dict=None, postings=None, df=None, bi_gram_dict=None):
     """
     Search for a postings list for one term, or search for 'AND' occurrences of two terms
 
@@ -210,113 +263,113 @@ def query(term1: str, term2=None, dict=None, postings=None, df=None):
     @return detailed_res_list   returns the dataFrame entries for all results
     """
     res_list = []
-    bi_gram_dict = create_bi_gram_dict(dict)
 
-    # if dict, postings or df are None, create them using index()
-    try:
-        if dict == None or postings == None or df == None:
-            dict, postings, df = index("tweets.csv")
-    except ValueError:
-        pass
-    
-    wildcards_1 = False
-    wildcards_2 = False
-    # normalize term1, so that it matches with the types in dictionary
-    # TODO implement wanted behaviour for terms as list, if len = 1 --> one term, we can normalize all
-    # TODO  terms inside one iteration over list
-    
+    wildcard_1 = False
+    wildcard_2 = False
+
+### check wether term 1 and/or term 2 are wildcard queries
+    # check for wildcards in term1; if no wildcard, normalize term
     if "*" in term1:
-        wildcards_1 = True
+        wildcard_1 = True
     else:
-        normalized1 = normalize(term1, multiple=False)[0]
+        term1 = normalize(term1, multiple=False)[0]
+    
+    if term2 == None and not wildcard_1:
+        return get_postings(term1, term_dict, postings)
+    
+    elif term2 == None and wildcard_1:
+        res_list = []
+        wild_query = get_wildcard_grams(term1)
+    
+        # initialize a wild_terms set with initial term-contenders 
+        # based on the first bi_gram
+        wild_terms = set()
+        temp_set = set()
+        for term in bi_gram_dict[wild_query[0]]:
+            wild_terms.add(term)
+    
+        # iterate over all bi_grams and intersect the wild_terms set
+        # with all term-contenders,
+        # in the end, wild_terms only contains terms, that contain all elements
+        # from the wild_query bi_gram list
+        for gram in wild_query[1:]:
+            for term in bi_gram_dict[gram]:
+                temp_set.add(term)
+            wild_terms = wild_terms.intersection(temp_set)
+        term_list = list(wild_terms)
 
-    if term2 == None and not wildcards_1:
-        try:
-            for el in postings[dict[normalized1][0]]:
-                res_list.append(el)
-        except KeyError:
-            pass
+        for term in term_list:
+            res_list.extend(get_postings(term))
+        
         return res_list
-    elif term2 == None and wildcards_1:
-        wild_query_1 = get_wildcard_grams(term1)
-        res = []
-        for bi in wild_query_1:
-            for term in bi_gram_dict[bi]:
-                res.append(term)
-        for el in res:
-            for ind in postings[dict[el][0]]:
-                res_list.append(ind)
-        return res_list
+
+    # check for wildcards in term2; if no wildcard, normalize term
+    elif "*" in term2:
+        wildcards_2 = True
     else:
-        if "*" in term2:
-            wildcards_2 = True
-        else:
-            normalized2 = normalize(term2, multiple=False)[0]
+        term2 = normalize(term2, multiple=False)[0]
+
     
-    
-    # TODO for assignment2: also split each term into its bigram with $ at the start
-    # if no term2, return postings for term1
-    if wildcards_1 and wildcards_2:
+###  both query terms contain wildcards
+    # get query results for terms both containing wildcards
+    if wildcard_1 and wildcard_2:
+     
+        # result for term1
         wild_query_1 = get_wildcard_grams(term1)
+    
+        wild_terms_1 = set()
+        temp_set_1 = set()
+        for term in bi_gram_dict[wild_query_1[0]]:
+            wild_terms_1.add(term)
+    
+        for gram in wild_query_1[1:]:
+            for term in bi_gram_dict[gram]:
+                temp_set_1.add(term)
+            wild_terms_1 = wild_terms_1.intersection(temp_set)
+            temp_set_1.clear()
+
+        # result for term2 
         wild_query_2 = get_wildcard_grams(term2)
-        term_1_list = []
-        term_2_list = []
-        for gram in wild_query_1:
-            for term_1 in bi_gram_dict[gram]:
-                term_1_list.append(term_1)
-        for gram in wild_query_2:
-            for term_2 in bi_gram_dict[gram]:
-                term_2_list.append(term_2)
-        for t1 in term_1_list:
-            for t2 in term_2_list:
-                for res in and_compare(t1, t2, dict, postings, df):
-                    res_list.append(res)
-    elif wildcards_1:
-        term_1_list = []
-        t2 = normalized2
-        wild_query_1 = get_wildcard_grams(term1)
-        for gram in wild_query_1:
-            for term_1 in bi_gram_dict[gram]:
-                term_1_list.append(term_1)
-
-        for t1 in term_1_list:
-            for res in and_compare(t1, t2, dict, postings, df):
+    
+        wild_terms_2 = set()
+        temp_set_2 = set()
+        for term in bi_gram_dict[wild_query_2[0]]:
+            wild_terms_2.add(term)
+    
+        for gram in wild_query_2[1:]:
+            for term in bi_gram_dict[gram]:
+                temp_set_2.add(term)
+            wild_terms_2 = wild_terms_2.intersection(temp_set_2)
+            temp_set_2.clear()
+        
+        # combine both results of term1 and term2 with and_compare function
+        for t1 in wild_terms_1:
+            for t2 in wild_terms_2:
+                for res in and_compare(t1, t2, term_dict, postings):
                     res_list.append(res)
 
+### only one of the terms contains wildcards
+    # term1 containing wildcard and term2 not
+    elif wildcard_1:
+        res_list = one_wild(term1,term2, bi_gram_dict, term_dict, postings)
+
+    # term2 containing wildcard and term1 not
     elif wildcards_2:
-        term_2_list = []
-        t1 = normalized1
-        wild_query_2 = get_wildcard_grams(term2)
-        for gram in wild_query_2:
-            for term_2 in bi_gram_dict[gram]:
-                term_2_list.append(term_2)
-        for t2 in term_2_list:
-            for res in and_compare(t1, t2, dict, postings, df):
-                    res_list.append(res)
+        res_list = one_wild(term2, term1, bi_gram_dict, term_dict, postings)
+    
     else:
-        res_list = and_compare(normalized1, normalized2)
+        res_list = and_compare(term1, term2)
 
-    detailed_res  = get_detailed_results(res_list)
+    # get detailed results
+    detailed_res  = get_detailed_results(res_list, df)
+
     return res_list, detailed_res
         
 
 
 
-
 if __name__ == "__main__":
-
-    # only execute this once, this creates pickle (.pkl) files for the dictionary, postings and df
-    """
-    dictionary , postings, df = index("tweets.csv")
-    with open('saved_dictionary_alt.pkl', 'wb+') as f:
-        pickle.dump(dictionary, f)
-    with open('saved_postings_alt.pkl', 'wb+') as f:
-        pickle.dump(postings, f)
-    with open("saved_df_alt.pkl", "wb+") as f:
-        df.to_pickle(f)
-    """
-
-      
+    
     # access the formerly created pickle (.pkl) files, this only works 
     # if the commented code above was executed previously
     with open('saved_dictionary_alt.pkl', 'rb') as f:
@@ -326,34 +379,64 @@ if __name__ == "__main__":
     with open("saved_df_alt.pkl", "rb") as f:
         loaded_df = pd.read_pickle(f)
 
+    with open("saved_bi_gram_dict.pkl", "rb") as f:
+        loaded_bigram_dict = pickle.load(f)
 
-    res_1, res_1_detailed = query("tumors*","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
-    #res_2, res_2_detailed = query("tumors","cancer*",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
-    #res_3, res_3_detailed = query("tum*ors","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
-    #res_4, res_4_detailed = query("tumors","*cancer*",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
+    res_1, res_1_detailed = query("germ*","tumor",  term_dict=loaded_dict, postings=loaded_postings, df=loaded_df, bi_gram_dict=loaded_bigram_dict)
+    res_2, res_2_detailed = query("german","tum*",  term_dict=loaded_dict, postings=loaded_postings, df=loaded_df, bi_gram_dict= loaded_bigram_dict)
+    res_3, res_3_detailed = query("ge*man","tumor",  term_dict=loaded_dict, postings=loaded_postings, df=loaded_df, bi_gram_dict=loaded_bigram_dict)
+    res_4, res_4_detailed = query("german","*umo*",  term_dict=loaded_dict, postings=loaded_postings, df=loaded_df, bi_gram_dict=loaded_bigram_dict)
+    
+    for el in res_1_detailed[:10]:
+        print(el["body"])
+    print()
+    for el in res_2_detailed[:10]:
+        print(el["body"])
+    print()
+    for el in res_3_detailed[:10]:
+        print(el["body"])  
+    print()
+    for el in res_4_detailed[:10]:
+        print(el["body"])
 
-    for i in range(10):
-        print(res_1_detailed[i]["body"])
-
-
-"""
-    res_both, res_both_detailed = query("tumors","cancer",  dict=loaded_dict, postings=loaded_postings, df=loaded_df)
-    # print subset of query results
-    for i in range(10):
-        print(res_both_detailed[i]["body"])
-        """
-
+    
 """
 OUTPUT:
 
-New Nanobots Kill Cancerous Tumors by Cutting off Their Blood Supply: https://t.co/g05sqIYGcK - #DigitalEconomy - February 19, 2018 at 08:01PM
-A role for iNOS in inducing tumors in the gut #colorectal #cancer https://t.co/6Y4cHiR3cI
-Sekali cancerous, risikonya kambuh lagi makin tinggi. Jaga-jaga saja. Kemarin si el** tuh, dia yg tumor gondok, sekarang jadi thyroid cancer lalu dinuklir --[NEWLINE][NEWLINE]Aih setop setop tante cakap macam mana la kebenaran pahit tu
-New DNA nanorobots successfully target and kill off cancerous tumors https://t.co/Lq9oagDUay via @TechCrunch
-An int. research team has succeeded in stopping the growth of malignant melanoma by reactivating a protective mechanism that prevents tumor cells from dividing https://t.co/Y6aXxCqoYr @MDC_Berlin #Cancer #CancerResearch
-@StickProfessor did you know we had a breakthrough in Germany about leukemia?[NEWLINE]It already helped in 400 of 400 cases. [NEWLINE]The person still has Cancer, sadly, but the Tumor in the Brainis gone ^^
-our new paper is out: We analyzed all Pubmed papers and all clinical trials related to cancer #immunotherapy and identified promising trends (including chemo+checkpoint, GI tumors, stroma and apoptosis) -> https://t.co/Cm97awMV3M @C_ReyesAldasoro @halama_immuno @nekvalous https://t.co/Tfq6QfUuQZ
-Cancer ‘vaccine’ eradicates tumors in mice, holds promise in humans - https://t.co/hLSVBUrN8w via @Shareaholic
-A cancer 'vaccine' is completely eliminating tumors in mice - New York Daily News https://t.co/jsDdA79eTf
-A cancer 'vaccine' is completely eliminating tumors in mice - New York Daily News https://t.co/NZ2xXqeWYm
+@GermanLetsPlay Alles gute zum Geburtstag Manu, schon ganze 26 Jahre und das trotz Tumor im Hals xD
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+@BadGirly_13 @Paulidraws @GermanLetsPlay @Paluten Ein Tumor haha XD
+@GermanLetsPlay ach manu das kennt man ja ünd alles gute zum geburtstag bleib so wie du bbist [NEWLINE]lg dein tumor#missmaggy
+@GermanLetsPlay alles gute zum Geburtstag du alter Tumor!
+@ShinyClove @OdinakaJesus @LetsTeddybaer GermanLetsPlay ist tumor und Mensch. Paluten Kürbis und Mensch. OdinakaJesus ist Gott und Mensch[NEWLINE]Wtf mein Weltbild hat sich verändert woooow
+@GermanLetsPlay Alles gute zum Geburtstag Manu, schon ganze 26 Jahre und das trotz Tumor im Hals xD
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+@BadGirly_13 @Paulidraws @GermanLetsPlay @Paluten Ein Tumor haha XD
+@GermanLetsPlay ach manu das kennt man ja ünd alles gute zum geburtstag bleib so wie du bbist [NEWLINE]lg dein tumor#missmaggy
+
+The German word Pakationzeln means a malignant tumour of plasmacytes.
+Germans call a tumour composed of nerve cells a Regfühnteinenmangsauchvenfortglerggesätzenaliseudern.
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+pictures of anal tumors man has sex with german shepherd porn zane's sex chronicles dvd janet  https://t.co/tAzURYwgra
+@Ben_Aaronovitch @iSalome_chan As I understand it, Malignität is only used in medical terms, like Malignität eines Tumors. Bösartigkeit is the German word for it, but can be used for humans as well, e.g. "Die Bösartigkeit des Gesichtslosen".
+|| Okay and now, I'm kinda disgusted because I saw something on Tumblr I didn't want to see.[NEWLINE][NEWLINE]Some of my fellow Germans are weird. Weirder than I am.
+
+@GerardZalcman @dplanchard @jco interesting to see if ongoing irAE correlate with ongoing tumor control, as in this patient with remission and arthralgia, now more than 12 months after cessation of nivo https://t.co/CaA3PE9hO6
+@GerardZalcman @dplanchard @jco interesting to see if ongoing irAE correlate with ongoing tumor control, as in this patient with remission and arthralgia, now more than 12 months after cessation of nivo https://t.co/CaA3PE9hO6
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+pictures of anal tumors man has sex with german shepherd porn zane's sex chronicles dvd janet  https://t.co/tAzURYwgra
+@Ben_Aaronovitch @iSalome_chan As I understand it, Malignität is only used in medical terms, like Malignität eines Tumors. Bösartigkeit is the German word for it, but can be used for humans as well, e.g. "Die Bösartigkeit des Gesichtslosen".
+
+Montag. Damit ist alles gesagt, oder?[NEWLINE][NEWLINE]#deutschland #comedy #lustig #witzig #montag #deutsch #geschenk #wahrheit german #bilder #fun #memes #schwarzer #humor #schwarzerhumor #lol  #happy #lachen #blogger_de #germanblogger #germanblog https://t.co/g06ICQsPyj
+der Spaß #fun[NEWLINE]die Freude #joy[NEWLINE]der Humor #humor[NEWLINE][NEWLINE]#German #vocabulary https://t.co/BliNRRRKm6
+Ich glaube, ich will nie wieder Luftballons geschenkt bekommen. Und du?[NEWLINE][NEWLINE]#deutschland #comedy #lustig #witzig #geburtstag #deutsch #geschenk #wahrheit german #bilder #fun #memes #schwarzer #humor #schwarzerhumor #lol  #happy #lachen #blogger_de #germanblogger #germanblog https://t.co/9FLgMoRFfv
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+@GermanLetsPlay Herzlichen Glückwunsch zum 26. Geburtstag Herr Tumor von German Lets Play
+pictures of anal tumors man has sex with german shepherd porn zane's sex chronicles dvd janet  https://t.co/tAzURYwgra
+@Ben_Aaronovitch @iSalome_chan As I understand it, Malignität is only used in medical terms, like Malignität eines Tumors. Bösartigkeit is the German word for it, but can be used for humans as well, e.g. "Die Bösartigkeit des Gesichtslosen".
+Montag. Damit ist alles gesagt, oder?[NEWLINE][NEWLINE]#deutschland #comedy #lustig #witzig #montag #deutsch #geschenk #wahrheit german #bilder #fun #memes #schwarzer #humor #schwarzerhumor #lol  #happy #lachen #blogger_de #germanblogger #germanblog https://t.co/g06ICQsPyj
+Ich glaube, ich will nie wieder Luftballons geschenkt bekommen. Und du?[NEWLINE][NEWLINE]#deutschland #comedy #lustig #witzig #geburtstag #deutsch #geschenk #wahrheit german #bilder #fun #memes #schwarzer #humor #schwarzerhumor #lol  #happy #lachen #blogger_de #germanblogger #germanblog https://t.co/9FLgMoRFfv
+⠀⠀⠀⠀❝You know, I'm actually pretty content with this.❞[NEWLINE][NEWLINE]╔[NEWLINE]║⠀⠀ • Finally a promo! [NEWLINE]║⠀⠀ • The Cooking Summoner[NEWLINE]║⠀⠀ • Not new to verse[NEWLINE]║⠀⠀ • German, sweet kid [NEWLINE]║⠀⠀ • SFW, ships with chem. [NEWLINE]║⠀⠀ • FERP only[NEWLINE]╚[NEWLINE][NEWLINE]⠀⠀⠀⠀DM for recruiting! https://t.co/K6qmDy4lDI
 """
